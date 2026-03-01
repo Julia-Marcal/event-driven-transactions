@@ -10,7 +10,12 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// NoopPublisher implements repository.Publisher but performs no network IO.
+type RabbitMQPublisher struct {
+	conn     *amqp.Connection
+	channel  *amqp.Channel
+	exchange string
+	logger   *log.Logger
+}
 type NoopPublisher struct {
 	logger *log.Logger
 }
@@ -23,14 +28,6 @@ func (n *NoopPublisher) Publish(ctx context.Context, event model.TransactionEven
 }
 
 func (n *NoopPublisher) Close() error { return nil }
-
-// RabbitMQPublisher is a thin wrapper around an AMQP channel/connection.
-type RabbitMQPublisher struct {
-	conn     *amqp.Connection
-	channel  *amqp.Channel
-	exchange string
-	logger   *log.Logger
-}
 
 func (r *RabbitMQPublisher) Publish(ctx context.Context, event model.TransactionEvent) error {
 	if r == nil || r.channel == nil {
@@ -67,8 +64,6 @@ func (r *RabbitMQPublisher) Close() error {
 	return nil
 }
 
-// NewRabbitMQPublisher creates a RabbitMQ-backed publisher. It returns a
-// repository.Publisher that publishes to the given exchange name.
 func NewRabbitMQPublisher(url string, logger *log.Logger) (repository.Publisher, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
@@ -109,6 +104,5 @@ func NewRabbitMQPublisher(url string, logger *log.Logger) (repository.Publisher,
 	return &RabbitMQPublisher{conn: conn, channel: ch, exchange: exchange, logger: logger}, nil
 }
 
-// compile-time check: ensure publishers satisfy repository.Publisher
 var _ repository.Publisher = (*NoopPublisher)(nil)
 var _ repository.Publisher = (*RabbitMQPublisher)(nil)

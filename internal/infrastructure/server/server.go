@@ -1,4 +1,3 @@
-// Package server wires dependencies and manages HTTP server lifecycle.
 package server
 
 import (
@@ -30,6 +29,30 @@ func Start() (*http.Server, *log.Logger) {
 	if err != nil {
 		logger.Fatalf("failed to create rabbitmq publisher: %v", err)
 	}
+
+	cfg := config.Load()
+
+	consumerCfg := rabbit.ConsumerConfig{
+		AmqpURL:    cfg.RabbitMQURL,
+		Exchange:   "transactions",
+		QueueName:  "transactions_worker",
+		Kind:       "topic",
+		RoutingKey: "transactions.*",
+		Logger:     logger,
+	}
+	consumer, err := rabbit.StartConsumer(consumerCfg, func(body []byte) error {
+		logger.Printf("[CONSUMER] received message: %s", string(body))
+		return nil
+	})
+	if err != nil {
+		logger.Fatalf("failed to start topic consumer: %v", err)
+	}
+
+	defer func() {
+		if consumer != nil {
+			_ = consumer.Close()
+		}
+	}()
 
 	defer func() {
 		if publisher != nil {
@@ -63,9 +86,6 @@ func startHTTPServer(srv *http.Server, logger *log.Logger) {
 	}()
 }
 
-// NewRabbitMQ returns a singleton publisher instance. It stores initialization
-// error and publisher in package-level variables so multiple callers get the
-// same instance.
 func NewRabbitMQ(logger *log.Logger) (repository.Publisher, error) {
 	cfg := config.Load()
 	_rabbitmqOnce.Do(func() {
