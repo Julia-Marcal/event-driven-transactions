@@ -18,7 +18,6 @@ type Transaction struct {
 	ID        uuid.UUID       `json:"transaction_id"`
 	AccountID string          `json:"account_id"`
 	Amount    float64         `json:"amount"`
-	Currency  string          `json:"currency"`
 	Type      TransactionType `json:"type"`
 	CreatedAt time.Time       `json:"created_at"`
 }

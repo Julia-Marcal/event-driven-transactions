@@ -1,34 +1,20 @@
 package server
 
 import (
+	"encoding/json"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
-	"github.com/Julia-Marcal/event-driven-transactions/internal/core/repository"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
-	"github.com/Julia-Marcal/event-driven-transactions/internal/handler"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/config"
 	rabbit "github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/rabbitmq"
-	"github.com/Julia-Marcal/event-driven-transactions/internal/router"
 )
 
-var (
-	_rabbitmqOnce   sync.Once
-	rabbitPublisher repository.Publisher
-	rabbitInitErr   error
-)
-
-func Start() (*http.Server, *log.Logger) {
+func Start() *log.Logger {
 	logger := buildLogger()
-
-	publisher, err := NewRabbitMQ(logger)
-	if err != nil {
-		logger.Fatalf("failed to create rabbitmq publisher: %v", err)
-	}
 
 	cfg := config.Load()
 
@@ -40,8 +26,21 @@ func Start() (*http.Server, *log.Logger) {
 		RoutingKey: "transactions.*",
 		Logger:     logger,
 	}
+
+	ts := service.TransactionService{Logger: logger}
 	consumer, err := rabbit.StartConsumer(consumerCfg, func(body []byte) error {
 		logger.Printf("[CONSUMER] received message: %s", string(body))
+		var req dto.CreateTransactionRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			logger.Printf("[CONSUMER] failed to unmarshal message: %v", err)
+			return err
+		}
+		_, err := ts.CreateAndPublish(nil, req)
+		if err != nil {
+			logger.Printf("[CONSUMER] failed to process message: %v", err)
+			return err
+		}
+		logger.Printf("[CONSUMER] successfully processed message for account: %s", req.AccountID)
 		return nil
 	})
 	if err != nil {
@@ -54,42 +53,13 @@ func Start() (*http.Server, *log.Logger) {
 		}
 	}()
 
-	defer func() {
-		if publisher != nil {
-			_ = publisher.Close()
-		}
-	}()
-
-	svc := service.NewTransactionService(publisher, logger)
-	handler.Init(svc)
-	srv := router.Router()
-
-	startHTTPServer(srv, logger)
-
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	return srv, logger
+	return logger
 }
 
 func buildLogger() *log.Logger {
 	return log.New(os.Stdout, "api: ", log.LstdFlags|log.Lmsgprefix)
-}
-
-func startHTTPServer(srv *http.Server, logger *log.Logger) {
-	go func() {
-		logger.Printf("listening on %s", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("listen: %v", err)
-		}
-	}()
-}
-
-func NewRabbitMQ(logger *log.Logger) (repository.Publisher, error) {
-	cfg := config.Load()
-	_rabbitmqOnce.Do(func() {
-		rabbitPublisher, rabbitInitErr = rabbit.NewRabbitMQPublisher(cfg.RabbitMQURL, logger)
-	})
-	return rabbitPublisher, rabbitInitErr
 }

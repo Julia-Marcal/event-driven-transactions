@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/model"
-	"github.com/Julia-Marcal/event-driven-transactions/internal/core/repository"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -63,46 +62,3 @@ func (r *RabbitMQPublisher) Close() error {
 	}
 	return nil
 }
-
-func NewRabbitMQPublisher(url string, logger *log.Logger) (repository.Publisher, error) {
-	conn, err := amqp.Dial(url)
-	if err != nil {
-		return nil, err
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-
-	exchange := "transactions"
-	if err := ch.ExchangeDeclare(
-		exchange,
-		"fanout",
-		true,  // durable
-		false, // auto-deleted
-		false, // internal
-		false, // no-wait
-		nil,   // args
-	); err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, err
-	}
-
-	closeCh := make(chan *amqp.Error, 1)
-	ch.NotifyClose(closeCh)
-	go func() {
-		for e := range closeCh {
-			if logger != nil {
-				logger.Printf("rabbitmq channel closed: %v", e)
-			}
-		}
-	}()
-
-	return &RabbitMQPublisher{conn: conn, channel: ch, exchange: exchange, logger: logger}, nil
-}
-
-var _ repository.Publisher = (*NoopPublisher)(nil)
-var _ repository.Publisher = (*RabbitMQPublisher)(nil)
