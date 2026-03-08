@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+
 	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/server"
 )
 
 func main() {
-	logger := server.Start()
+	ctx := context.Background()
+	logger := server.Start(ctx)
 
 	logger.Println("server exiting")
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/model"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/mongodb"
 	"github.com/google/uuid"
 )
 
@@ -29,13 +30,20 @@ func (s *TransactionService) CreateAndPublish(ctx context.Context, req dto.Creat
 	e := model.TransactionEvent{
 		ID:        uuid.New(),
 		AccountID: req.AccountID,
-		Amount:    req.Amount,
+		Amount:    float64(int64(req.Amount)),
 		Type:      model.TransactionType(req.Type),
 		CreatedAt: time.Now(),
 	}
 
 	if s.Logger != nil {
 		s.Logger.Printf("Created transaction: %+v", e)
+	}
+
+	if err := mongodb.InsertTransaction(ctx, e); err != nil {
+		if s.Logger != nil {
+			s.Logger.Printf("Failed to insert transaction: %v", err)
+		}
+		return e, err
 	}
 
 	return e, nil

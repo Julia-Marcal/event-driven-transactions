@@ -1,22 +1,32 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/config"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/mongodb"
 	rabbit "github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/rabbitmq"
 )
 
-func Start() *log.Logger {
+func Start(ctx context.Context) *log.Logger {
 	logger := buildLogger()
 
 	cfg := config.Load()
+
+	cleanup, err := InitMongo(ctx)
+	if err != nil {
+		slog.Debug("failed to initialize mongodb", "error", err)
+		cleanup = nil
+	}
 
 	consumerCfg := rabbit.ConsumerConfig{
 		AmqpURL:    cfg.RabbitMQURL,
@@ -35,7 +45,7 @@ func Start() *log.Logger {
 			logger.Printf("[CONSUMER] failed to unmarshal message: %v", err)
 			return err
 		}
-		_, err := ts.CreateAndPublish(nil, req)
+		_, err := ts.CreateAndPublish(ctx, req)
 		if err != nil {
 			logger.Printf("[CONSUMER] failed to process message: %v", err)
 			return err
@@ -53,6 +63,10 @@ func Start() *log.Logger {
 		}
 	}()
 
+	if cleanup != nil {
+		cleanup()
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -62,4 +76,21 @@ func Start() *log.Logger {
 
 func buildLogger() *log.Logger {
 	return log.New(os.Stdout, "api: ", log.LstdFlags|log.Lmsgprefix)
+}
+
+func InitMongo(parentCtx context.Context) (func(), error) {
+	connCtx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
+	client, err := mongodb.Connect(connCtx)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+
+	cleanup := func() {
+		if err := mongodb.Disconnect(context.Background(), client); err != nil {
+			slog.Debug("error disconnecting mongodb", "error", err)
+		}
+	}
+
+	return cleanup, nil
 }
