@@ -1,8 +1,12 @@
 package rabbitmq
 
 import (
+	"context"
+	"encoding/json"
 	"log"
 
+	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -20,11 +24,10 @@ type Consumer struct {
 	channel *amqp.Channel
 	stopCh  chan struct{}
 	doneCh  chan struct{}
-	handler func([]byte) error
 	logger  *log.Logger
 }
 
-func StartConsumer(cfg ConsumerConfig, handler func([]byte) error) (*Consumer, error) {
+func StartConsumer(cfg ConsumerConfig) (*Consumer, error) {
 	conn, err := connectRabbitMQ(cfg.AmqpURL)
 	if err != nil {
 		return nil, err
@@ -74,7 +77,6 @@ func StartConsumer(cfg ConsumerConfig, handler func([]byte) error) (*Consumer, e
 		channel: ch,
 		stopCh:  make(chan struct{}),
 		doneCh:  make(chan struct{}),
-		handler: handler,
 		logger:  cfg.Logger,
 	}
 
@@ -85,25 +87,48 @@ func StartConsumer(cfg ConsumerConfig, handler func([]byte) error) (*Consumer, e
 
 func (c *Consumer) consumeLoop(msgs <-chan amqp.Delivery) {
 	defer close(c.doneCh)
+	ts := service.TransactionService{Logger: c.logger}
+	ctx := context.Background()
 	for {
 		select {
 		case d, ok := <-msgs:
 			if !ok {
 				return
 			}
-			if c.handler != nil {
-				err := c.handler(d.Body)
-				if err != nil {
-					c.logger.Printf("[CONSUMER] handler error: %v", err)
-					_ = d.Nack(false, true)
-					continue
-				}
+			err := c.Process(d.Body, &d, ts, ctx)
+			if err != nil {
+				c.logger.Printf("[CONSUMER] handler error: %v", err)
+				_ = d.Nack(false, true)
+				continue
 			}
-			_ = d.Ack(false)
 		case <-c.stopCh:
 			return
 		}
 	}
+}
+
+func (c *Consumer) Process(body []byte, d *amqp.Delivery, ts service.TransactionService, ctx context.Context) error {
+	c.logger.Printf("[CONSUMER] received message: %s", string(body))
+	var req dto.CreateTransactionRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		_ = d.Nack(false, false)
+		c.logger.Printf("[CONSUMER] failed to unmarshal message: %v", err)
+		return err
+	}
+	if err := req.Validate(); err != nil {
+		_ = d.Nack(false, false)
+		c.logger.Printf("[CONSUMER] validation error: %v", err)
+		return err
+	}
+	_, err := ts.CreateAndPublish(ctx, req)
+	if err != nil {
+		_ = d.Nack(false, true)
+		c.logger.Printf("[CONSUMER] failed to process message: %v", err)
+		return err
+	}
+	c.logger.Printf("[CONSUMER] successfully processed message for account: %s", req.AccountID)
+	_ = d.Ack(true)
+	return nil
 }
 
 func (c *Consumer) Close() error {

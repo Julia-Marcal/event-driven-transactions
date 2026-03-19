@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"encoding/json"
+
 	"log"
 	"log/slog"
 	"os"
@@ -10,8 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
-	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/config"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/mongodb"
 	rabbit "github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/rabbitmq"
@@ -37,22 +35,7 @@ func Start(ctx context.Context) *log.Logger {
 		Logger:     logger,
 	}
 
-	ts := service.TransactionService{Logger: logger}
-	consumer, err := rabbit.StartConsumer(consumerCfg, func(body []byte) error {
-		logger.Printf("[CONSUMER] received message: %s", string(body))
-		var req dto.CreateTransactionRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			logger.Printf("[CONSUMER] failed to unmarshal message: %v", err)
-			return err
-		}
-		_, err := ts.CreateAndPublish(ctx, req)
-		if err != nil {
-			logger.Printf("[CONSUMER] failed to process message: %v", err)
-			return err
-		}
-		logger.Printf("[CONSUMER] successfully processed message for account: %s", req.AccountID)
-		return nil
-	})
+	consumer, err := rabbit.StartConsumer(consumerCfg)
 	if err != nil {
 		logger.Fatalf("failed to start topic consumer: %v", err)
 	}
