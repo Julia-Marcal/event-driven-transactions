@@ -39,7 +39,11 @@ func (s *TransactionService) CreateAndPublish(ctx context.Context, req dto.Creat
 		s.Logger.Printf("Created transaction: %+v", e)
 	}
 
-	if err := mongodb.InsertTransaction(ctx, e); err != nil {
+	if err := mongodb.InsertTransaction(ctx, e, req.IdempotencyKey); err != nil {
+		if err == mongodb.ErrDuplicateIdempotencyKey {
+			s.Log("Duplicate idempotency key: %s", req.IdempotencyKey)
+			return model.TransactionEvent{}, mongodb.ErrDuplicateIdempotencyKey
+		}
 		if s.Logger != nil {
 			s.Logger.Printf("Failed to insert transaction: %v", err)
 		}

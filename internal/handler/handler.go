@@ -8,6 +8,7 @@ import (
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/mongodb"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +36,10 @@ func CreateTransaction(c *gin.Context) {
 	ctx := c.Request.Context()
 	event, err := svc.CreateAndPublish(ctx, req)
 	if err != nil {
+		if err == mongodb.ErrDuplicateIdempotencyKey {
+			c.JSON(http.StatusOK, gin.H{"message": "already processed"})
+			return
+		}
 		switch err.Error() {
 		case "amount must be greater than zero", "currency must be a 3-letter code", "account_id is required", "type must be 'credit' or 'debit'":
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

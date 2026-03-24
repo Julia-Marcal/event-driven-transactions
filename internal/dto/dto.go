@@ -7,9 +7,10 @@ import (
 
 // CreateTransactionRequest is the DTO received from the HTTP API.
 type CreateTransactionRequest struct {
-	AccountID string  `json:"accountId"`
-	Amount    float64 `json:"amount"`
-	Type      string  `json:"type"` // expected: "credit" or "debit"
+	AccountID      string  `json:"account_id"`
+	Amount         float64 `json:"amount"`
+	Type           string  `json:"type"` // expected: "credit" or "debit"
+	IdempotencyKey string  `json:"idempotency_key"`
 }
 
 // Validate performs simple, deterministic validation on the DTO.
