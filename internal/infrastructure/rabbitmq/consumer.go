@@ -3,10 +3,12 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
+	"github.com/Julia-Marcal/event-driven-transactions/internal/infrastructure/mongodb"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -122,6 +124,13 @@ func (c *Consumer) Process(body []byte, d *amqp.Delivery, ts service.Transaction
 	}
 	_, err := ts.CreateAndPublish(ctx, req)
 	if err != nil {
+		if errors.Is(err, mongodb.ErrAccountNotFound) ||
+			errors.Is(err, mongodb.ErrInsufficientFunds) ||
+			errors.Is(err, mongodb.ErrDuplicateIdempotencyKey) {
+			_ = d.Nack(false, false)
+			c.logger.Printf("[CONSUMER] discarding message (non-retriable): %v", err)
+			return err
+		}
 		_ = d.Nack(false, true)
 		c.logger.Printf("[CONSUMER] failed to process message: %v", err)
 		return err

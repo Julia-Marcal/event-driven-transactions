@@ -35,20 +35,20 @@ func (s *TransactionService) CreateAndPublish(ctx context.Context, req dto.Creat
 		CreatedAt: time.Now(),
 	}
 
-	if s.Logger != nil {
-		s.Logger.Printf("Created transaction: %+v", e)
-	}
-
-	if err := mongodb.InsertTransaction(ctx, e, req.IdempotencyKey); err != nil {
-		if err == mongodb.ErrDuplicateIdempotencyKey {
+	if err := mongodb.ProcessTransaction(ctx, e, req.IdempotencyKey); err != nil {
+		switch {
+		case errors.Is(err, mongodb.ErrDuplicateIdempotencyKey):
 			s.Log("Duplicate idempotency key: %s", req.IdempotencyKey)
-			return model.TransactionEvent{}, mongodb.ErrDuplicateIdempotencyKey
+		case errors.Is(err, mongodb.ErrAccountNotFound):
+			s.Log("Account not found: %s", req.AccountID)
+		case errors.Is(err, mongodb.ErrInsufficientFunds):
+			s.Log("Insufficient funds for account %s: balance too low for amount %.2f", req.AccountID, req.Amount)
+		default:
+			s.Log("Failed to process transaction: %v", err)
 		}
-		if s.Logger != nil {
-			s.Logger.Printf("Failed to insert transaction: %v", err)
-		}
-		return e, err
+		return model.TransactionEvent{}, err
 	}
 
+	s.Log("Transaction processed: id=%s account=%s type=%s amount=%.2f", e.ID, e.AccountID, e.Type, e.Amount)
 	return e, nil
 }
