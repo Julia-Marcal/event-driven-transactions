@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"runtime"
+	"sync"
 
 	"github.com/Julia-Marcal/event-driven-transactions/internal/core/service"
 	"github.com/Julia-Marcal/event-driven-transactions/internal/dto"
@@ -36,6 +38,16 @@ func StartConsumer(cfg ConsumerConfig) (*Consumer, error) {
 	}
 	ch, err := createChannel(conn)
 	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	if err := ch.Qos(
+		workersLimit(), // prefetchCount: igual ao número de workers
+		0,              // prefetchSize: sem limite por bytes
+		false,          // global: false = por consumer, não por channel
+	); err != nil {
+		_ = ch.Close()
 		_ = conn.Close()
 		return nil, err
 	}
@@ -88,28 +100,47 @@ func StartConsumer(cfg ConsumerConfig) (*Consumer, error) {
 }
 
 func (c *Consumer) consumeLoop(msgs <-chan amqp.Delivery) {
+	jobs := make(chan amqp.Delivery, 100)
+
 	defer close(c.doneCh)
 	ts := service.TransactionService{Logger: c.logger}
-	ctx := context.Background()
+
+	for i := 0; i < workersLimit(); i++ {
+		go c.worker(i, jobs, ts)
+	}
+
 	for {
 		select {
 		case d, ok := <-msgs:
 			if !ok {
+				close(jobs)
 				return
 			}
-			err := c.Process(d.Body, &d, ts, ctx)
-			if err != nil {
-				c.logger.Printf("[CONSUMER] handler error: %v", err)
-				_ = d.Nack(false, true)
-				continue
-			}
+
+			jobs <- d
+
 		case <-c.stopCh:
+			close(jobs)
 			return
 		}
 	}
 }
 
+func (c *Consumer) worker(id int, jobs <-chan amqp.Delivery, ts service.TransactionService) {
+	ctx := context.Background()
+
+	for m := range jobs {
+		err := c.Process(m.Body, &m, ts, ctx)
+		if err != nil {
+			c.logger.Printf("[CONSUMER][WORKER %d] handler error: %v", id, err)
+			_ = m.Nack(false, true)
+			continue
+		}
+	}
+}
+
 func (c *Consumer) Process(body []byte, d *amqp.Delivery, ts service.TransactionService, ctx context.Context) error {
+	var processed sync.Map
 	c.logger.Printf("[CONSUMER] received message: %s", string(body))
 	var req dto.CreateTransactionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -117,11 +148,18 @@ func (c *Consumer) Process(body []byte, d *amqp.Delivery, ts service.Transaction
 		c.logger.Printf("[CONSUMER] failed to unmarshal message: %v", err)
 		return err
 	}
+
+	if _, ok := processed.Load(req.IdempotencyKey); ok {
+		d.Ack(false)
+		return nil
+	}
+
 	if err := req.Validate(); err != nil {
 		_ = d.Nack(false, false)
 		c.logger.Printf("[CONSUMER] validation error: %v", err)
 		return err
 	}
+
 	_, err := ts.CreateAndPublish(ctx, req)
 	if err != nil {
 		if errors.Is(err, mongodb.ErrAccountNotFound) ||
@@ -135,6 +173,8 @@ func (c *Consumer) Process(body []byte, d *amqp.Delivery, ts service.Transaction
 		c.logger.Printf("[CONSUMER] failed to process message: %v", err)
 		return err
 	}
+
+	processed.Store(req.IdempotencyKey, true)
 	c.logger.Printf("[CONSUMER] successfully processed message for account: %s", req.AccountID)
 	_ = d.Ack(true)
 	return nil
@@ -193,20 +233,6 @@ func bindQueueWithKey(ch *amqp.Channel, queueName, exchange, routingKey string) 
 	)
 }
 
-func startConsumer(ch *amqp.Channel, queueName string) (<-chan amqp.Delivery, error) {
-	return ch.Consume(
-		queueName,
-		"",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-}
-
-func logMessages(msgs <-chan amqp.Delivery, logger *log.Logger) {
-	for d := range msgs {
-		logger.Printf("[CONSUMER] received message: %s", string(d.Body))
-	}
+func workersLimit() int {
+	return runtime.NumCPU() * 2
 }
